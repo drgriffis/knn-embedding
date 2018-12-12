@@ -4,8 +4,6 @@
 import numpy as np
 import tensorflow as tf
 import multiprocessing as mp
-from drgriffis.science import embeddings
-from drgriffis.common import log, util
 
 class NearestNeighbors:
     

@@ -7,10 +7,10 @@ import tensorflow as tf
 import numpy as np
 import codecs
 import os
-import pyemblib
-import configlogger
 from nearest_neighbors import NearestNeighbors
-from drgriffis.common import log, util
+from dependencies import pyemblib
+from dependencies import configlogger
+from dependencies.drgriffis.common import log, util
 
 class _SIGNALS:
     HALT = -1
