@@ -7,9 +7,9 @@ import tensorflow as tf
 import numpy as np
 import codecs
 import os
-from scipy.stats import spearmanr
+import pyemblib
+import configlogger
 from nearest_neighbors import NearestNeighbors
-from drgriffis.science import embeddings
 from drgriffis.common import log, util
 
 class _SIGNALS:
@@ -20,7 +20,7 @@ def KNearestNeighbors(emb_arr, top_k, neighbor_file, threads=2, batch_size=5):
     '''docstring goes here
     '''
     # set up threads
-    log.writeln('1 | Setup')
+    log.writeln('1 | Thread initialization')
     index_subsets = util.prepareForParallel(list(range(len(emb_arr))), threads-1, data_only=True)
     nn_q = mp.Queue()
     nn_writer = mp.Process(target=_nn_writer, args=(neighbor_file, len(emb_arr), nn_q))
@@ -29,15 +29,16 @@ def KNearestNeighbors(emb_arr, top_k, neighbor_file, threads=2, batch_size=5):
             for i in range(threads - 1)
     ]
     nn_writer.start()
-    log.writeln('2 | Compute')
+    log.writeln('2 | Neighbor computation')
     util.parallelExecute(computers)
     nn_q.put(_SIGNALS.HALT)
     nn_writer.join()
 
 def _nn_writer(neighborf, total, nn_q):
     stream = open(neighborf, 'w')
+    stream.write('# File format is:\n# <word vocab index>,<NN 1>,<NN 2>,...\n')
     result = nn_q.get()
-    log.track(message='  >> Processed {0}/%d samples' % total, writeInterval=500)
+    log.track(message='  >> Processed {0}/{1:,} samples'.format('{0:,}', total), writeInterval=500)
     while result != _SIGNALS.HALT:
         (ix, neighbors) = result
         stream.write('%s\n' % ','.join([str(d) for d in [ix, *neighbors]]))
@@ -69,42 +70,54 @@ if __name__ == '__main__':
                 default='output.csv')
         parser.add_option('--vocab', dest='vocabf',
                 help='file to read ordered vocabulary from (will be written if does not exist yet)')
-        parser.add_option('--glove-vocab', dest='glove_vocabf',
-                help='vocab file if using GloVe vectors')
         parser.add_option('-k', '--nearest-neighbors', dest='k',
                 help='number of nearest neighbors to calculate (default: %default)',
                 type='int', default=25)
+        parser.add_option('--batch-size', dest='batch_size',
+                type='int', default=25,
+                help='number of points to process at once (default %default)')
+        parser.add_option('--embedding-mode', dest='embedding_mode',
+                type='choice', choices=[pyemblib.Mode.Text, pyemblib.Mode.Binary], default=pyemblib.Mode.Binary,
+                help='embedding file is in text ({0}) or binary ({1}) format (default: %default)'.format(pyemblib.Mode.Text, pyemblib.Mode.Binary))
         parser.add_option('-l', '--logfile', dest='logfile',
                 help='name of file to write log contents to (empty for stdout)',
                 default=None)
-        parser.add_option('--text', dest='embtext',
-                help='read embeddings in text format instead of binary',
-                action='store_true', default=False)
         (options, args) = parser.parse_args()
         if len(args) != 1:
             parser.print_help()
             exit()
         (embf,) = args
-        return embf, options.glove_vocabf, options.vocabf, options.threads, options.outputf, options.k, options.embtext, options.logfile
-    embf, glove_vocabf, vocabf, threads, outputf, k, embtext, logfile = _cli()
-    log.start(logfile=logfile, stdout_also=True)
+        return embf, options
 
-    if glove_vocabf:
-        emb = embeddings.read(embf, format=embeddings.Format.Glove, vocab=glove_vocabf, mode=embeddings.glove.GloveMode.SumContexts)
-    else:
-        mode = embeddings.Mode.Text if embtext else embeddings.Mode.Binary
-        emb = embeddings.read(embf, mode=mode)
+    embf, options = _cli()
+    log.start(logfile=options.logfile)
+    configlogger.writeConfig(log, [
+        ('Input embedding file', embf),
+        ('Input embedding file mode', options.embedding_mode),
+        ('Output neighbor file', options.outputf),
+        ('Ordered vocabulary file', options.vocabf),
+        ('Number of nearest neighbors', options.k),
+        ('Batch size', options.batch_size),
+        ('Number of threads', options.threads),
+    ], 'k Nearest Neighbor calculation with cosine similarity')
 
-    if not os.path.isfile(vocabf):
-        log.writeln('Writing ordered vocabulary to %s' % vocabf)
-        embeddings.listVocab(emb, vocabf)
+    t_sub = log.startTimer('Reading embeddings from %s...' % embf)
+    emb = pyemblib.read(embf, mode=options.embedding_mode)
+    log.stopTimer(t_sub, message='Read {0:,} embeddings in {1}s.\n'.format(len(emb), '{0:.2f}'))
+
+    if not os.path.isfile(options.vocabf):
+        log.writeln('Writing ordered vocabulary to %s...\n' % options.vocabf)
+        pyemblib.listVocab(emb, options.vocabf)
     else:
-        log.writeln('Reading ordered vocabulary from %s' % vocabf)
-    ordered_vocab = util.readList(vocabf, encoding='utf-8')
+        log.writeln('Reading ordered vocabulary from %s...\n' % options.vocabf)
+    ordered_vocab = util.readList(options.vocabf, encoding='utf-8')
 
     emb_arr = np.array([
         emb[v] for v in ordered_vocab
     ])
 
-    batch_size = 25
-    KNearestNeighbors(emb_arr, k, outputf, threads=threads, batch_size=batch_size)
+    log.writeln('Calculating k nearest neighbors.')
+    KNearestNeighbors(emb_arr, options.k, options.outputf, threads=options.threads, batch_size=options.batch_size)
+    log.writeln('Done!\n')
+
+    log.stop()
