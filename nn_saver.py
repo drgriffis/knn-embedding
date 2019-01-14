@@ -58,6 +58,14 @@ def _threadedNeighbors(thread_indices, emb_arr, batch_size, top_k, nn_q):
             nn_q.put((batch[i], nn[i]))
         ix += batch_size
 
+def readVocab(f):
+    vocab = []
+    with codecs.open(f, 'r', 'utf-8') as stream:
+        for line in stream:
+            if len(line.strip()) > 0:
+                vocab.append(line.strip())
+    return vocab
+
 if __name__ == '__main__':
     def _cli():
         import optparse
@@ -102,7 +110,7 @@ if __name__ == '__main__':
     ], 'k Nearest Neighbor calculation with cosine similarity')
 
     t_sub = log.startTimer('Reading embeddings from %s...' % embf)
-    emb = pyemblib.read(embf, mode=options.embedding_mode)
+    emb = pyemblib.read(embf, mode=options.embedding_mode, errors='replace')
     log.stopTimer(t_sub, message='Read {0:,} embeddings in {1}s.\n'.format(len(emb), '{0:.2f}'))
 
     if not os.path.isfile(options.vocabf):
@@ -110,7 +118,7 @@ if __name__ == '__main__':
         pyemblib.listVocab(emb, options.vocabf)
     else:
         log.writeln('Reading ordered vocabulary from %s...\n' % options.vocabf)
-    ordered_vocab = util.readList(options.vocabf, encoding='utf-8')
+    ordered_vocab = readVocab(options.vocabf)
 
     emb_arr = np.array([
         emb[v] for v in ordered_vocab
