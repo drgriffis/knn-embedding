@@ -8,8 +8,8 @@ import numpy as np
 import codecs
 import os
 from nearest_neighbors import NearestNeighbors
-from dependencies import pyemblib
-from dependencies import configlogger
+import pyemblib
+import configlogger
 from dependencies.drgriffis.common import log, util
 
 class _SIGNALS:

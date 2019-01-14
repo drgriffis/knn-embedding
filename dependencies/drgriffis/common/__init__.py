@@ -1,4 +1,0 @@
-'''
-'''
-
-from .logging import log
