@@ -10,7 +10,7 @@ import os
 from nearest_neighbors import NearestNeighbors
 import pyemblib
 import configlogger
-from dependencies.drgriffis.common import log, util
+from drgriffis.common import log, util
 
 class _SIGNALS:
     HALT = -1
