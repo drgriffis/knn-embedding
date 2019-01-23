@@ -12,8 +12,8 @@ changes are made in graph generation:
    sample files were v is a nearest neighbor of w.
 '''
 
-from dependencies import configlogger
-from dependencies.drgriffis.common import log
+import configlogger
+from drgriffis.common import log
 
 def readNeighbors(samplef, k):
     neighborhoods = {}
