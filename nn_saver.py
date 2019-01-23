@@ -16,14 +16,24 @@ class _SIGNALS:
     HALT = -1
     COMPUTE = 1
 
-def KNearestNeighbors(emb_arr, top_k, neighbor_file, threads=2, batch_size=5):
+def KNearestNeighbors(emb_arr, node_IDs, top_k, neighbor_file, threads=2, batch_size=5, completed_neighbors=None):
     '''docstring goes here
     '''
     # set up threads
     log.writeln('1 | Thread initialization')
-    index_subsets = util.prepareForParallel(list(range(len(emb_arr))), threads-1, data_only=True)
+    all_indices = list(range(len(emb_arr)))
+    if completed_neighbors:
+        filtered_indices = []
+        for ix in all_indices:
+            if not ix in completed_neighbors:
+                filtered_indices.append(ix)
+        all_indices = filtered_indices
+        log.writeln('  >> Filtered out {0:,} completed indices'.format(len(emb_arr) - len(filtered_indices)))
+        log.writeln('  >> Filtered set size: {0:,}'.format(len(all_indices)))
+    #index_subsets = util.prepareForParallel(list(range(len(emb_arr))), threads-1, data_only=True)
+    index_subsets = util.prepareForParallel(all_indices, threads-1, data_only=True)
     nn_q = mp.Queue()
-    nn_writer = mp.Process(target=_nn_writer, args=(neighbor_file, len(emb_arr), nn_q))
+    nn_writer = mp.Process(target=_nn_writer, args=(neighbor_file, node_IDs, nn_q))
     computers = [
         mp.Process(target=_threadedNeighbors, args=(index_subsets[i], emb_arr, batch_size, top_k, nn_q))
             for i in range(threads - 1)
@@ -34,14 +44,21 @@ def KNearestNeighbors(emb_arr, top_k, neighbor_file, threads=2, batch_size=5):
     nn_q.put(_SIGNALS.HALT)
     nn_writer.join()
 
-def _nn_writer(neighborf, total, nn_q):
+def _nn_writer(neighborf, node_IDs, nn_q):
     stream = open(neighborf, 'w')
     stream.write('# File format is:\n# <word vocab index>,<NN 1>,<NN 2>,...\n')
     result = nn_q.get()
-    log.track(message='  >> Processed {0}/{1:,} samples'.format('{0:,}', total), writeInterval=500)
+    log.track(message='  >> Processed {0}/{1:,} samples'.format('{0:,}', len(node_IDs)), writeInterval=50)
     while result != _SIGNALS.HALT:
         (ix, neighbors) = result
-        stream.write('%s\n' % ','.join([str(d) for d in [ix, *neighbors]]))
+        stream.write('%s\n' % ','.join([
+            str(d) for d in [
+                node_IDs[ix], *[
+                    node_IDs[nbr]
+                        for nbr in neighbors
+                ]
+            ]
+        ]))
         log.tick()
         result = nn_q.get() 
     log.flushTracker()
@@ -58,13 +75,35 @@ def _threadedNeighbors(thread_indices, emb_arr, batch_size, top_k, nn_q):
             nn_q.put((batch[i], nn[i]))
         ix += batch_size
 
-def readVocab(f):
-    vocab = []
+def writeNodeMap(emb, f):
+    ordered = tuple([
+        k.strip()
+            for k in emb.keys()
+            if len(k.strip()) > 0
+    ])
+    node_id = 1  # start from 1 in case 0 is reserved in node2vec
+    with codecs.open(f, 'w', 'utf-8') as stream:
+        for v in ordered:
+            stream.write('%d\t%s\n' % (
+                node_id, v
+            ))
+            node_id += 1
+    
+def readNodeMap(f, as_ordered_list=False):
+    node_map = {}
     with codecs.open(f, 'r', 'utf-8') as stream:
         for line in stream:
-            if len(line.strip()) > 0:
-                vocab.append(line.strip())
-    return vocab
+            (node_id, v) = [s.strip() for s in line.split('\t')]
+            node_map[int(node_id)] = v
+
+    if as_ordered_list:
+        keys = list(node_map.keys())
+        keys.sort()
+        node_map = [
+            node_map[k]
+                for k in keys
+        ]
+    return node_map
 
 if __name__ == '__main__':
     def _cli():
@@ -87,6 +126,8 @@ if __name__ == '__main__':
         parser.add_option('--embedding-mode', dest='embedding_mode',
                 type='choice', choices=[pyemblib.Mode.Text, pyemblib.Mode.Binary], default=pyemblib.Mode.Binary,
                 help='embedding file is in text ({0}) or binary ({1}) format (default: %default)'.format(pyemblib.Mode.Text, pyemblib.Mode.Binary))
+        parser.add_option('--partial-neighbors-file', dest='partial_neighbors_file',
+                help='file with partially calculated nearest neighbors (for resuming long-running job)')
         parser.add_option('-l', '--logfile', dest='logfile',
                 help='name of file to write log contents to (empty for stdout)',
                 default=None)
@@ -107,6 +148,7 @@ if __name__ == '__main__':
         ('Number of nearest neighbors', options.k),
         ('Batch size', options.batch_size),
         ('Number of threads', options.threads),
+        ('Partial nearest neighbors file for resuming', options.partial_neighbors_file),
     ], 'k Nearest Neighbor calculation with cosine similarity')
 
     t_sub = log.startTimer('Reading embeddings from %s...' % embf)
@@ -114,18 +156,45 @@ if __name__ == '__main__':
     log.stopTimer(t_sub, message='Read {0:,} embeddings in {1}s.\n'.format(len(emb), '{0:.2f}'))
 
     if not os.path.isfile(options.vocabf):
-        log.writeln('Writing ordered vocabulary to %s...\n' % options.vocabf)
-        pyemblib.listVocab(emb, options.vocabf)
+        log.writeln('Writing node ID <-> vocab map to %s...\n' % options.vocabf)
+        writeNodeMap(emb, options.vocabf)
     else:
-        log.writeln('Reading ordered vocabulary from %s...\n' % options.vocabf)
-    ordered_vocab = readVocab(options.vocabf)
+        log.writeln('Reading node ID <-> vocab map from %s...\n' % options.vocabf)
+    node_map = readNodeMap(options.vocabf)
+
+    # get the vocabulary in node ID order, and map index in emb_arr
+    # to node IDs
+    node_IDs = list(node_map.keys())
+    node_IDs.sort()
+    ordered_vocab = [
+        node_map[node_ID]
+            for node_ID in node_IDs
+    ]
 
     emb_arr = np.array([
         emb[v] for v in ordered_vocab
     ])
 
+    if options.partial_neighbors_file:
+        completed_neighbors = set()
+        with open(options.partial_neighbors_file, 'r') as stream:
+            for line in stream:
+                if line[0] != '#':
+                    (neighbor_id, _) = line.split(',', 1)
+                    completed_neighbors.add(int(neighbor_id))
+    else:
+        completed_neighbors = set()
+
     log.writeln('Calculating k nearest neighbors.')
-    KNearestNeighbors(emb_arr, options.k, options.outputf, threads=options.threads, batch_size=options.batch_size)
+    KNearestNeighbors(
+        emb_arr,
+        node_IDs,
+        options.k,
+        options.outputf,
+        threads=options.threads,
+        batch_size=options.batch_size,
+        completed_neighbors=completed_neighbors
+    )
     log.writeln('Done!\n')
 
     log.stop()
