@@ -99,6 +99,10 @@ if __name__ == '__main__':
                 help='embedding file is in text ({0}) or binary ({1}) format (default: %default)'.format(pyemblib.Mode.Text, pyemblib.Mode.Binary))
         parser.add_option('--partial-neighbors-file', dest='partial_neighbors_file',
                 help='file with partially calculated nearest neighbors (for resuming long-running job)')
+        parser.add_option('--shared-keys-with', dest='shared_keys_with',
+                help='another embedding file; if supplied, nearest neighbor computation'
+                     ' will be constrained to those keys shared between EMB1 and this'
+                     ' file')
         parser.add_option('-l', '--logfile', dest='logfile',
                 help='name of file to write log contents to (empty for stdout)',
                 default=None)
@@ -120,11 +124,25 @@ if __name__ == '__main__':
         ('Batch size', options.batch_size),
         ('Number of threads', options.threads),
         ('Partial nearest neighbors file for resuming', options.partial_neighbors_file),
+        ('Restricting to keys shared with', ('N/A' if not options.shared_keys_with else options.shared_keys_with)),
     ], 'k Nearest Neighbor calculation with cosine similarity')
 
     t_sub = log.startTimer('Reading embeddings from %s...' % embf)
     emb = pyemblib.read(embf, mode=options.embedding_mode, errors='replace')
     log.stopTimer(t_sub, message='Read {0:,} embeddings in {1}s.\n'.format(len(emb), '{0:.2f}'))
+
+    if options.shared_keys_with:
+        t_sub = log.startTimer('Reading reference embeddings from %s...' % options.shared_keys_with)
+        emb2 = pyemblib.read(options.shared_keys_with, errors='replace')
+        log.stopTimer(t_sub, message='Read {0:,} embeddings in {1}s.\n'.format(len(emb2), '{0:.2f}'))
+
+        log.writeln('Filtering to shared key set...')
+        shared_keys = set(emb.keys()).intersection(set(emb2.keys()))
+        filtered_emb = pyemblib.Embeddings()
+        for key in shared_keys:
+            filtered_emb[key] = emb[key]
+        emb = filtered_emb
+        log.writeln('Filtered to {0:,} embeddings.\n'.format(len(emb)))
 
     if not os.path.isfile(options.vocabf):
         log.writeln('Writing node ID <-> vocab map to %s...\n' % options.vocabf)
