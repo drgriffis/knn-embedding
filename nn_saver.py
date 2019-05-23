@@ -9,6 +9,7 @@ import codecs
 import os
 from nearest_neighbors import NearestNeighbors
 import pyemblib
+import io_lib
 from hedgepig_logger import log
 from drgriffis.common import util
 
@@ -51,14 +52,14 @@ def _nn_writer(neighborf, node_IDs, nn_q):
     log.track(message='  >> Processed {0}/{1:,} samples'.format('{0:,}', len(node_IDs)), writeInterval=50)
     while result != _SIGNALS.HALT:
         (ix, neighbors) = result
-        stream.write('%s\n' % ','.join([
-            str(d) for d in [
-                node_IDs[ix], *[
-                    node_IDs[nbr]
-                        for nbr in neighbors
-                ]
+        io_lib.writeNeighborFileLine(
+            stream,
+            node_IDs[ix],
+            [
+                node_IDs[nbr]
+                    for nbr in neighbors
             ]
-        ]))
+        )
         log.tick()
         result = nn_q.get() 
     log.flushTracker()
@@ -74,36 +75,6 @@ def _threadedNeighbors(thread_indices, emb_arr, batch_size, top_k, nn_q):
         for i in range(len(batch)):
             nn_q.put((batch[i], nn[i]))
         ix += batch_size
-
-def writeNodeMap(emb, f):
-    ordered = tuple([
-        k.strip()
-            for k in emb.keys()
-            if len(k.strip()) > 0
-    ])
-    node_id = 1  # start from 1 in case 0 is reserved in node2vec
-    with codecs.open(f, 'w', 'utf-8') as stream:
-        for v in ordered:
-            stream.write('%d\t%s\n' % (
-                node_id, v
-            ))
-            node_id += 1
-    
-def readNodeMap(f, as_ordered_list=False):
-    node_map = {}
-    with codecs.open(f, 'r', 'utf-8') as stream:
-        for line in stream:
-            (node_id, v) = [s.strip() for s in line.split('\t')]
-            node_map[int(node_id)] = v
-
-    if as_ordered_list:
-        keys = list(node_map.keys())
-        keys.sort()
-        node_map = [
-            node_map[k]
-                for k in keys
-        ]
-    return node_map
 
 if __name__ == '__main__':
     def _cli():
@@ -157,10 +128,10 @@ if __name__ == '__main__':
 
     if not os.path.isfile(options.vocabf):
         log.writeln('Writing node ID <-> vocab map to %s...\n' % options.vocabf)
-        writeNodeMap(emb, options.vocabf)
+        io_lib.writeNodeMap(emb, options.vocabf)
     else:
         log.writeln('Reading node ID <-> vocab map from %s...\n' % options.vocabf)
-    node_map = readNodeMap(options.vocabf)
+    node_map = io_lib.readNodeMap(options.vocabf)
 
     # get the vocabulary in node ID order, and map index in emb_arr
     # to node IDs
