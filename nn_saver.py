@@ -9,8 +9,8 @@ import codecs
 import os
 from nearest_neighbors import NearestNeighbors
 import pyemblib
-import configlogger
-from drgriffis.common import log, util
+from hedgepig_logger import log
+from drgriffis.common import util
 
 class _SIGNALS:
     HALT = -1
@@ -139,8 +139,8 @@ if __name__ == '__main__':
         return embf, options
 
     embf, options = _cli()
-    log.start(logfile=options.logfile)
-    configlogger.writeConfig(log, [
+    log.start(options.logfile)
+    log.writeConfig([
         ('Input embedding file', embf),
         ('Input embedding file mode', options.embedding_mode),
         ('Output neighbor file', options.outputf),
