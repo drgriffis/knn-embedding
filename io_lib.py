@@ -50,7 +50,7 @@ def writeNeighborFileLine(stream, node_ID, neighbors, with_distances=False):
         ]
     ]))
 
-def readNeighborFile(f, k=None, node_map=None, with_distances=False):
+def readNeighborFile(f, k=None, node_map=None, with_distances=False, query_node_map=None):
     '''Read a neighbor file into a dictionary mapping
     { node: [neighbor list] }
 
@@ -64,14 +64,18 @@ def readNeighborFile(f, k=None, node_map=None, with_distances=False):
 
     if node_map:
         remap = lambda key: node_map.get(key, key)
+        if query_node_map:
+            query_remap = lambda key: query_node_map.get(key, key)
+        else: query_remap = remap
     else:
         remap = lambda key: key
+        query_remap = remap
 
     with codecs.open(f, 'r', 'utf-8') as stream:
         for line in stream:
             if line[0] != '#':
                 (node_ID, *neighbor_info_strs) = line.split(',')
-                node_ID = remap(int(node_ID))
+                node_ID = query_remap(int(node_ID))
                 if with_distances:
                     neighbor_info = []
                     for nbr_info in neighbor_info_strs:

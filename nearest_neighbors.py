@@ -36,6 +36,13 @@ class MultiNearestNeighbors:
             shape=[None,],
             dtype=tf.int32
         )
+        self._sample_embeds = [
+            tf.placeholder(
+                shape=[None,emb_shapes[i][1]],
+                dtype=tf.float32
+            ) for i in range(len(emb_shapes))
+        ]
+
         self._embed_phs = [
             tf.placeholder(
                 shape=emb_shapes[i],
@@ -55,8 +62,15 @@ class MultiNearestNeighbors:
             ) for i in range(len(emb_shapes))
         ]
 
-        self._sample_distances = [
+        self._indexed_sample_distances = [
             self._distance(self._sample_points[i], self._embed_matrices[i])
+                for i in range(len(emb_shapes))
+        ]
+        self._embed_sample_distances = [
+            self._distance(
+                tf.nn.l2_normalize(self._sample_embeds[i], 1),
+                self._embed_matrices[i]
+            )
                 for i in range(len(emb_shapes))
         ]
 
@@ -83,17 +97,27 @@ class MultiNearestNeighbors:
         outputs = self._session.run(all_nodes, feed_dict=feed_dict)
         return outputs[len(self._prints):]
 
-    def nearestNeighbors(self, batch_indices, top_k=None, no_self=True, with_distances=False):
+    def nearestNeighbors(self, batch_input, indices=True, top_k=None, no_self=True, with_distances=False):
         # get the pairwise distances for this batch for each set of embeddings
         all_distances = []
         for i in range(self._number_of_embeddings):
-            (pairwise_distances,) = self._exec([
-                    self._indexed_sample_distances[i]
-                ],
-                feed_dict = {
-                    self._sample_indices: batch_input
-                }
-            )
+            if indices:
+                (pairwise_distances,) = self._exec([
+                        self._indexed_sample_distances[i]
+                    ],
+                    feed_dict = {
+                        self._sample_indices: batch_input
+                    }
+                )
+            else:
+                (pairwise_distances,) = self._exec([
+                        self._embed_sample_distances[i]
+                    ],
+                    feed_dict = {
+                        self._sample_embeds[i]: batch_input[i]
+                            for i in range(len(self._sample_embeds))
+                    }
+                )
             all_distances.append(pairwise_distances)
 
         # average the distances across all sets of embeddings
@@ -102,13 +126,17 @@ class MultiNearestNeighbors:
         assert len(averaged_distances) == len(pairwise_distances)
 
         nearest_neighbors = []
-        for i in range(len(batch_indices)):
+        if indices:
+            itr = range(len(batch_input))
+        else:
+            itr = range(len(batch_input[0]))
+        for i in itr:
             distance_vector = averaged_distances[i]
             sorted_neighbors = np.argsort(distance_vector)
             # if skipping the query, remove it from the neighbor list
             # (should be in the 0th position; if it's not, just move on)
             if no_self: 
-                if sorted_neighbors[0] == batch_indices[i]: sorted_neighbors = sorted_neighbors[1:]
+                if sorted_neighbors[0] == batch_input[i]: sorted_neighbors = sorted_neighbors[1:]
             # if restricting to top k, do so here
             if top_k is None:
                 kept_neighbors = sorted_neighbors
